@@ -8,16 +8,20 @@ from pathlib import Path
 import torch
 
 from coconut_lm.config import CoconutConfig
-from coconut_lm.data import build_addition_tokenizer, make_batch
+from coconut_lm.data import (
+    build_addition_tokenizer,
+    encode_texts,
+    make_batch_from_examples,
+    read_jsonl_texts,
+)
 from coconut_lm.model import TinyCoconutLM
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a tiny COCONUT LM on toy addition.")
+    parser.add_argument("--dataset", type=Path, default=Path("data/addition_train.jsonl"))
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--latent-steps", type=int, default=4)
-    parser.add_argument("--max-value", type=int, default=99)
     parser.add_argument("--block-size", type=int, default=64)
     parser.add_argument("--n-layer", type=int, default=4)
     parser.add_argument("--n-head", type=int, default=4)
@@ -38,6 +42,9 @@ def main() -> None:
     device = torch.device(args.device)
 
     tokenizer = build_addition_tokenizer()
+    texts = read_jsonl_texts(args.dataset)
+    examples = encode_texts(tokenizer, texts, args.block_size)
+    latent_steps = texts[0].count("<latent>")
     config = CoconutConfig(
         vocab_size=len(tokenizer.itos),
         block_size=args.block_size,
@@ -53,12 +60,10 @@ def main() -> None:
 
     model.train()
     for step in range(1, args.steps + 1):
-        input_ids, targets = make_batch(
-            tokenizer,
+        input_ids, targets = make_batch_from_examples(
+            examples,
+            tokenizer=tokenizer,
             batch_size=args.batch_size,
-            max_value=args.max_value,
-            latent_steps=args.latent_steps,
-            block_size=args.block_size,
             rng=rng,
             device=device,
         )
@@ -77,7 +82,8 @@ def main() -> None:
         "config": dataclasses.asdict(config),
         "model": model.state_dict(),
         "tokenizer": tokenizer.stoi,
-        "latent_steps": args.latent_steps,
+        "dataset": str(args.dataset),
+        "latent_steps": latent_steps,
     }
     path = args.out_dir / "model.pt"
     torch.save(checkpoint, path)
@@ -86,4 +92,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

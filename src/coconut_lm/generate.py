@@ -3,11 +3,18 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import torch
-
 from coconut_lm.config import CoconutConfig
-from coconut_lm.model import TinyCoconutLM
 from coconut_lm.tokenizer import CharTokenizer
+
+
+def normalize_prompt(prompt: str) -> str:
+    """Accept common shell escape sequences in CLI prompts."""
+    return (
+        prompt.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+        .replace("\\\\", "\\")
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,12 +25,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-k", type=int, default=None)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default=None)
     return parser.parse_args()
 
 
 def main() -> None:
+    import torch
+
+    from coconut_lm.model import TinyCoconutLM
+
     args = parse_args()
+    if args.device is None:
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     tokenizer = CharTokenizer.from_stoi(checkpoint["tokenizer"])
@@ -37,7 +50,7 @@ def main() -> None:
 
     prefix = (
         [tokenizer.bos_id]
-        + tokenizer.encode(args.prompt)
+        + tokenizer.encode(normalize_prompt(args.prompt))
         + [tokenizer.latent_id] * latent_steps
     )
     input_ids = torch.tensor([prefix], dtype=torch.long, device=device)
@@ -55,4 +68,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

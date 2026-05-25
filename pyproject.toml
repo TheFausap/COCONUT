@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "torch>=2.2",
+  "numpy",
 ]
 
 [project.optional-dependencies]
@@ -18,9 +19,9 @@ dev = [
 ]
 
 [project.scripts]
+coconut-build-dataset = "coconut_lm.build_dataset:main"
 coconut-train = "coconut_lm.train:main"
 coconut-generate = "coconut_lm.generate:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

@@ -44,7 +44,19 @@ class CharTokenizer:
         return self.stoi["<latent>"]
 
     def encode(self, text: str, *, bos: bool = False, eos: bool = False) -> list[int]:
-        ids = [self.stoi[ch] for ch in text]
+        ids: list[int] = []
+        idx = 0
+        while idx < len(text):
+            special = next((token for token in SPECIAL_TOKENS if text.startswith(token, idx)), None)
+            if special is not None:
+                ids.append(self.stoi[special])
+                idx += len(special)
+                continue
+            char = text[idx]
+            if char not in self.stoi:
+                raise ValueError(f"character {char!r} is not in the tokenizer vocabulary") from None
+            ids.append(self.stoi[char])
+            idx += 1
         if bos:
             ids.insert(0, self.bos_id)
         if eos:
@@ -59,4 +71,3 @@ class CharTokenizer:
                 continue
             pieces.append(token)
         return "".join(pieces)
-
