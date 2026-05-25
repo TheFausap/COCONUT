@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coconut-lm"
+version = "0.1.0"
+description = "A tiny decoder-only language model with Chain of Continuous Thought latent reasoning."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[project.scripts]
+coconut-train = "coconut_lm.train:main"
+coconut-generate = "coconut_lm.generate:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
