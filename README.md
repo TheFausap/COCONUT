@@ -22,7 +22,7 @@ python -m pip install -e ".[dev]"
 
 ```bash
 coconut-build-dataset --kind plain-text --out data/plain_text.jsonl --examples 1000
-coconut-build-dataset --kind hf-plain-text --out data/truthv2_plain_text.jsonl --examples 1000
+coconut-build-dataset --kind hf-plain-text --out data/truthv2_plain_text.jsonl --examples 5000
 coconut-build-dataset --kind qa --out data/qa.jsonl --examples 1000
 coconut-build-dataset --kind latent-qa --out data/latent_qa.jsonl --examples 1000 --latent-steps 4
 coconut-build-dataset --kind proofs3-qa --out data/proofs3_qa.jsonl --examples 5000
