@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=None, help="Random-sampling updates. If omitted, epochs are used.")
     parser.add_argument("--epochs", type=int, default=1, help="Full shuffled passes over the dataset when --steps is omitted.")
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--grad-accum-steps", type=int, default=1, help="Accumulate gradients across this many micro-batches.")
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--n-layer", type=int, default=4)
     parser.add_argument("--n-head", type=int, default=4)
@@ -84,6 +85,13 @@ def iter_epoch_batches(
     return batches
 
 
+def clear_device_cache(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
+
+
 def main() -> None:
     args = parse_args()
     rng = random.Random(args.seed)
@@ -95,6 +103,8 @@ def main() -> None:
     examples = encode_texts(tokenizer, texts, config.block_size)
     latent_steps = texts[0].count("<latent>")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    if args.grad_accum_steps < 1:
+        raise ValueError("--grad-accum-steps must be at least 1")
 
     model.train()
     if args.steps is None:
@@ -104,23 +114,29 @@ def main() -> None:
             epochs=args.epochs,
             rng=rng,
         )
-        total_steps = len(epoch_batches)
+        total_micro_steps = len(epoch_batches)
+        total_steps = (total_micro_steps + args.grad_accum_steps - 1) // args.grad_accum_steps
         print(
             f"training {len(examples)} examples for {args.epochs} epoch(s) "
-            f"with batch size {args.batch_size}: {total_steps} optimizer step(s)"
+            f"with micro-batch size {args.batch_size}, grad accumulation {args.grad_accum_steps}: "
+            f"{total_micro_steps} micro-step(s), {total_steps} optimizer step(s)"
         )
     else:
         epoch_batches = []
-        total_steps = args.steps
+        total_micro_steps = args.steps
+        total_steps = (total_micro_steps + args.grad_accum_steps - 1) // args.grad_accum_steps
         print(
-            f"training with random sampling for {total_steps} optimizer step(s) "
-            f"from {len(examples)} examples"
+            f"training with random sampling for {total_micro_steps} micro-step(s) "
+            f"from {len(examples)} examples, grad accumulation {args.grad_accum_steps}: "
+            f"{total_steps} optimizer step(s)"
         )
 
-    for step in range(1, total_steps + 1):
+    optimizer.zero_grad(set_to_none=True)
+    last_loss = 0.0
+    for micro_step in range(1, total_micro_steps + 1):
         if args.steps is None:
             input_ids, targets = collate_examples(
-                epoch_batches[step - 1],
+                epoch_batches[micro_step - 1],
                 tokenizer=tokenizer,
                 device=device,
             )
@@ -134,13 +150,24 @@ def main() -> None:
             )
         output = model(input_ids, targets=targets)
         assert output.loss is not None
-        optimizer.zero_grad(set_to_none=True)
-        output.loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        loss = output.loss / args.grad_accum_steps
+        loss.backward()
+        last_loss = output.loss.item()
 
-        if step == 1 or step % args.log_every == 0 or step == total_steps:
-            print(f"step {step:05d} | loss {output.loss.item():.4f}")
+        should_step = micro_step % args.grad_accum_steps == 0 or micro_step == total_micro_steps
+        if should_step:
+            optimizer_step = (micro_step + args.grad_accum_steps - 1) // args.grad_accum_steps
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            clear_device_cache(device)
+
+            if optimizer_step == 1 or optimizer_step % args.log_every == 0 or optimizer_step == total_steps:
+                print(
+                    f"step {optimizer_step:05d}/{total_steps:05d} "
+                    f"| micro {micro_step:05d}/{total_micro_steps:05d} "
+                    f"| loss {last_loss:.4f}"
+                )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = {

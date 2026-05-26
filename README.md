@@ -64,12 +64,24 @@ The `proofs3-qa` and `proofs3-latent-qa` modes default to `shreyasharma/proofs3`
 ```bash
 coconut-train --dataset data/truthv2_plain_text.jsonl --block-size 1024 --epochs 1 --out-dir runs/plain
 coconut-train --dataset data/proofs3_qa.jsonl --checkpoint runs/plain/model.pt --epochs 1 --out-dir runs/proofs3_qa
-coconut-train --dataset data/proofs3_latent_qa.jsonl --checkpoint runs/proofs3_qa/model.pt --epochs 1 --out-dir runs/proofs3_latent_qa
+coconut-train --dataset data/proofs3_latent_qa.jsonl --checkpoint runs/proofs3_qa/model.pt --epochs 1 --batch-size 1 --grad-accum-steps 16 --out-dir runs/proofs3_latent_qa
 ```
 
 The first stage is normal next-token language modeling. The second stage teaches a simple question-answer format. The third stage keeps the same visible-answer objective, but inserts `<latent>` slots before the answer and fills those slots with continuous hidden states during the forward pass.
 
 When `--steps` is omitted, training uses `--epochs` and makes full shuffled passes over the dataset without replacement. For example, 5000 rows with `--batch-size 64 --epochs 1` runs 79 optimizer updates. Use `--steps N` when you explicitly want random sampling with replacement.
+
+Latent QA uses much more memory than plain QA because every `<latent>` position requires extra transformer passes over the prefix. On MPS, prefer small micro-batches and gradient accumulation:
+
+```bash
+coconut-train --dataset data/proofs3_latent_qa.jsonl \
+  --checkpoint runs/proofs3_qa/model.pt \
+  --epochs 1 \
+  --batch-size 1 \
+  --grad-accum-steps 16 \
+  --device mps \
+  --out-dir runs/proofs3_latent_qa
+```
 
 ## Generate
 
