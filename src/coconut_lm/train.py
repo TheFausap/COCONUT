@@ -105,9 +105,17 @@ def main() -> None:
             rng=rng,
         )
         total_steps = len(epoch_batches)
+        print(
+            f"training {len(examples)} examples for {args.epochs} epoch(s) "
+            f"with batch size {args.batch_size}: {total_steps} optimizer step(s)"
+        )
     else:
         epoch_batches = []
         total_steps = args.steps
+        print(
+            f"training with random sampling for {total_steps} optimizer step(s) "
+            f"from {len(examples)} examples"
+        )
 
     for step in range(1, total_steps + 1):
         if args.steps is None:
@@ -131,7 +139,7 @@ def main() -> None:
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        if step == 1 or step % args.log_every == 0:
+        if step == 1 or step % args.log_every == 0 or step == total_steps:
             print(f"step {step:05d} | loss {output.loss.item():.4f}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
