@@ -22,6 +22,7 @@ python -m pip install -e ".[dev]"
 
 ```bash
 coconut-build-dataset --kind plain-text --out data/plain_text.jsonl --examples 1000
+coconut-build-dataset --kind hf-plain-text --out data/truthv2_plain_text.jsonl --examples 1000
 coconut-build-dataset --kind qa --out data/qa.jsonl --examples 1000
 coconut-build-dataset --kind latent-qa --out data/latent_qa.jsonl --examples 1000 --latent-steps 4
 ```
@@ -30,6 +31,18 @@ Each JSONL row has a `text` field that acts like one tiny training document:
 
 ```json
 {"text": "Question: What is 79 plus 68?\nAnswer:<latent><latent><latent><latent> 147", "kind": "latent-qa", "question": "What is 79 plus 68?", "answer": "147", "left": 79, "right": 68}
+```
+
+The `hf-plain-text` mode defaults to `shreyasharma/sentences_truthv2` and fetches rows through Hugging Face's dataset-viewer API, so local Parquet handling is not needed. It tries common text columns such as `text` and `sentence`; pass `--text-column COLUMN_NAME` if you want to force one:
+
+```bash
+coconut-build-dataset \
+  --kind hf-plain-text \
+  --hf-dataset shreyasharma/sentences_truthv2 \
+  --hf-config default \
+  --hf-split train \
+  --out data/truthv2_plain_text.jsonl \
+  --examples 5000
 ```
 
 ## Train With A Curriculum

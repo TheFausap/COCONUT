@@ -9,7 +9,7 @@ import torch
 
 from coconut_lm.config import CoconutConfig
 from coconut_lm.data import (
-    build_default_tokenizer,
+    DEFAULT_VOCAB_TEXT,
     encode_texts,
     make_batch_from_examples,
     read_jsonl_texts,
@@ -41,6 +41,7 @@ def load_or_create_model(
     args: argparse.Namespace,
     *,
     device: torch.device,
+    texts: list[str],
 ) -> tuple[CharTokenizer, CoconutConfig, TinyCoconutLM]:
     if args.checkpoint is not None:
         checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -50,7 +51,7 @@ def load_or_create_model(
         model.load_state_dict(checkpoint["model"])
         return tokenizer, config, model
 
-    tokenizer = build_default_tokenizer()
+    tokenizer = CharTokenizer.build(DEFAULT_VOCAB_TEXT + "".join(texts))
     config = CoconutConfig(
         vocab_size=len(tokenizer.itos),
         block_size=args.block_size,
@@ -71,8 +72,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
     device = torch.device(args.device)
 
-    tokenizer, config, model = load_or_create_model(args, device=device)
     texts = read_jsonl_texts(args.dataset)
+    tokenizer, config, model = load_or_create_model(args, device=device, texts=texts)
     examples = encode_texts(tokenizer, texts, config.block_size)
     latent_steps = texts[0].count("<latent>")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)

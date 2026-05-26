@@ -10,6 +10,7 @@ from coconut_lm.data import (
     build_default_tokenizer,
     read_jsonl_texts,
     write_addition_dataset,
+    write_hf_plain_text_dataset,
     write_plain_text_dataset,
     write_qa_dataset,
 )
@@ -50,6 +51,48 @@ class DatasetTest(unittest.TestCase):
         self.assertNotIn("<latent>", qa["text"])
         self.assertEqual(latent["kind"], "latent-qa")
         self.assertIn("<latent><latent><latent>", latent["text"])
+
+    def test_hf_plain_text_dataset_uses_rows_api_shape(self):
+        def fake_fetch_page(**kwargs):
+            self.assertEqual(kwargs["dataset"], "shreyasharma/sentences_truthv2")
+            return {
+                "rows": [
+                    {
+                        "row_idx": 0,
+                        "row": {
+                            "sentence": "  The sky is blue.  ",
+                            "truth": True,
+                        },
+                    },
+                    {
+                        "row_idx": 1,
+                        "row": {
+                            "sentence": "Water is wet.",
+                            "truth": True,
+                        },
+                    },
+                ]
+            }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "hf.jsonl"
+            write_hf_plain_text_dataset(
+                path,
+                dataset="shreyasharma/sentences_truthv2",
+                config="default",
+                split="train",
+                examples=2,
+                fetch_page=fake_fetch_page,
+            )
+            records = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(records[0]["text"], "The sky is blue.")
+        self.assertEqual(records[0]["kind"], "hf-plain-text")
+        self.assertEqual(records[0]["source"], "shreyasharma/sentences_truthv2")
+        self.assertEqual(records[1]["row_idx"], 1)
 
 
 class TokenizerTest(unittest.TestCase):

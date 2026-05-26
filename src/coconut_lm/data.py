@@ -4,7 +4,10 @@ import json
 import random
 import string
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 from coconut_lm.tokenizer import CharTokenizer
 
@@ -13,6 +16,15 @@ if TYPE_CHECKING:
 
 
 DEFAULT_VOCAB_TEXT = string.ascii_letters + string.digits + string.punctuation + " \n\t"
+HF_ROWS_API = "https://datasets-server.huggingface.co/rows"
+TEXT_COLUMN_CANDIDATES = [
+    "text",
+    "sentence",
+    "content",
+    "statement",
+    "prompt",
+    "question",
+]
 
 PLAIN_TEXT_TEMPLATES = [
     "The sun is bright and warm.",
@@ -89,6 +101,112 @@ def write_plain_text_dataset(path: Path, *, examples: int, seed: int) -> None:
         {"text": rng.choice(PLAIN_TEXT_TEMPLATES), "kind": "plain-text"}
         for _ in range(examples)
     ]
+    write_jsonl(path, records)
+
+
+def fetch_hf_rows_page(
+    *,
+    dataset: str,
+    config: str,
+    split: str,
+    offset: int,
+    length: int,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    query = urlencode(
+        {
+            "dataset": dataset,
+            "config": config,
+            "split": split,
+            "offset": offset,
+            "length": length,
+        }
+    )
+    url = f"{HF_ROWS_API}?{query}"
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"Hugging Face returned HTTP {exc.code} for {url}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"could not reach Hugging Face dataset API: {exc.reason}") from exc
+
+
+def extract_text_from_hf_row(row: dict[str, Any], text_column: str | None = None) -> str:
+    if text_column is not None:
+        value = row.get(text_column)
+        if not isinstance(value, str):
+            raise ValueError(f"configured text column {text_column!r} is missing or is not a string")
+        return value
+
+    for candidate in TEXT_COLUMN_CANDIDATES:
+        value = row.get(candidate)
+        if isinstance(value, str) and value.strip():
+            return value
+
+    string_values = [value for value in row.values() if isinstance(value, str) and value.strip()]
+    if not string_values:
+        raise ValueError(f"could not infer a text column from row keys: {sorted(row.keys())}")
+    return max(string_values, key=len)
+
+
+def clean_plain_text(text: str, *, max_chars: int | None = None) -> str:
+    cleaned = " ".join(text.split())
+    if max_chars is not None:
+        cleaned = cleaned[:max_chars].rstrip()
+    return cleaned
+
+
+def write_hf_plain_text_dataset(
+    path: Path,
+    *,
+    dataset: str,
+    config: str,
+    split: str,
+    examples: int,
+    text_column: str | None = None,
+    max_chars: int | None = 500,
+    page_size: int = 100,
+    fetch_page: Callable[..., dict[str, Any]] = fetch_hf_rows_page,
+) -> None:
+    records: list[dict[str, object]] = []
+    offset = 0
+    page_size = max(1, min(page_size, 100))
+
+    while len(records) < examples:
+        page = fetch_page(
+            dataset=dataset,
+            config=config,
+            split=split,
+            offset=offset,
+            length=min(page_size, examples - len(records)),
+        )
+        rows = page.get("rows", [])
+        if not rows:
+            break
+        for item in rows:
+            row = item.get("row", item)
+            if not isinstance(row, dict):
+                continue
+            text = clean_plain_text(extract_text_from_hf_row(row, text_column), max_chars=max_chars)
+            if not text:
+                continue
+            records.append(
+                {
+                    "text": text,
+                    "kind": "hf-plain-text",
+                    "source": dataset,
+                    "split": split,
+                    "row_idx": item.get("row_idx"),
+                    "text_column": text_column,
+                }
+            )
+            if len(records) >= examples:
+                break
+        offset += len(rows)
+
+    if not records:
+        raise ValueError(f"no text rows were fetched from {dataset}/{config}/{split}")
     write_jsonl(path, records)
 
 
