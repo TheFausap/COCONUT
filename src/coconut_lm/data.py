@@ -25,6 +25,7 @@ TEXT_COLUMN_CANDIDATES = [
     "prompt",
     "question",
 ]
+PROOFS3_DATASET = "shreyasharma/proofs3"
 
 PLAIN_TEXT_TEMPLATES = [
     "The sun is bright and warm.",
@@ -61,6 +62,15 @@ def render_addition_text(left: int, right: int, latent_steps: int) -> str:
 
 def render_qa_text(question: str, answer: str, latent_steps: int = 0) -> str:
     return f"Question: {question}\nAnswer:" + ("<latent>" * latent_steps) + f" {answer}"
+
+
+def render_context_qa_text(context: list[str], question: str, answer: str, latent_steps: int = 0) -> str:
+    context_block = "\n".join(f"- {fact}" for fact in context)
+    return (
+        f"Context:\n{context_block}\n\nQuestion: {question}\nAnswer:"
+        + ("<latent>" * latent_steps)
+        + f" {answer}"
+    )
 
 
 def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
@@ -157,6 +167,21 @@ def clean_plain_text(text: str, *, max_chars: int | None = None) -> str:
     return cleaned
 
 
+def sorted_numbered_values(mapping: dict[str, Any], *, prefix: str, limit: int | None = None) -> list[str]:
+    def key_number(key: str) -> int:
+        suffix = key.removeprefix(prefix)
+        return int(suffix) if suffix.isdigit() else 0
+
+    values: list[str] = []
+    for key in sorted(mapping, key=key_number):
+        value = mapping[key]
+        if isinstance(value, str) and value.strip():
+            values.append(clean_plain_text(value))
+        if limit is not None and len(values) >= limit:
+            break
+    return values
+
+
 def write_hf_plain_text_dataset(
     path: Path,
     *,
@@ -207,6 +232,71 @@ def write_hf_plain_text_dataset(
 
     if not records:
         raise ValueError(f"no text rows were fetched from {dataset}/{config}/{split}")
+    write_jsonl(path, records)
+
+
+def write_hf_proofs3_qa_dataset(
+    path: Path,
+    *,
+    dataset: str,
+    config: str,
+    split: str,
+    examples: int,
+    latent_steps: int,
+    max_context_sentences: int | None = 12,
+    page_size: int = 100,
+    fetch_page: Callable[..., dict[str, Any]] = fetch_hf_rows_page,
+) -> None:
+    records: list[dict[str, object]] = []
+    offset = 0
+    page_size = max(1, min(page_size, 100))
+
+    while len(records) < examples:
+        page = fetch_page(
+            dataset=dataset,
+            config=config,
+            split=split,
+            offset=offset,
+            length=min(page_size, examples - len(records)),
+        )
+        rows = page.get("rows", [])
+        if not rows:
+            break
+        for item in rows:
+            row = item.get("row", item)
+            if not isinstance(row, dict):
+                continue
+            question = row.get("question")
+            answer = row.get("answer")
+            triples = row.get("triples")
+            if not isinstance(question, str) or not isinstance(answer, str) or not isinstance(triples, dict):
+                continue
+            context = sorted_numbered_values(triples, prefix="sent", limit=max_context_sentences)
+            if not context:
+                continue
+            question = clean_plain_text(question)
+            answer = clean_plain_text(answer)
+            records.append(
+                {
+                    "text": render_context_qa_text(context, question, answer, latent_steps),
+                    "kind": "proofs3-latent-qa" if latent_steps else "proofs3-qa",
+                    "source": dataset,
+                    "split": split,
+                    "row_idx": item.get("row_idx"),
+                    "question": question,
+                    "answer": answer,
+                    "hypothesis": clean_plain_text(row["hypothesis"]) if isinstance(row.get("hypothesis"), str) else None,
+                    "step_proof": clean_plain_text(row["step_proof"]) if isinstance(row.get("step_proof"), str) else None,
+                    "label": row.get("label"),
+                    "context": context,
+                }
+            )
+            if len(records) >= examples:
+                break
+        offset += len(rows)
+
+    if not records:
+        raise ValueError(f"no proofs3 QA rows were fetched from {dataset}/{config}/{split}")
     write_jsonl(path, records)
 
 
@@ -285,6 +375,22 @@ def make_batch_from_examples(
     batch = [examples[rng.randrange(len(examples))] for _ in range(batch_size)]
     max_len = max(len(example) for example in batch)
     input_ids = torch.full((batch_size, max_len), tokenizer.pad_id, dtype=torch.long)
+    for row, example in enumerate(batch):
+        input_ids[row, : len(example)] = torch.tensor(example, dtype=torch.long)
+    input_ids = input_ids.to(device)
+    return input_ids, input_ids.clone()
+
+
+def collate_examples(
+    batch: list[list[int]],
+    *,
+    tokenizer: CharTokenizer,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    import torch
+
+    max_len = max(len(example) for example in batch)
+    input_ids = torch.full((len(batch), max_len), tokenizer.pad_id, dtype=torch.long)
     for row, example in enumerate(batch):
         input_ids[row, : len(example)] = torch.tensor(example, dtype=torch.long)
     input_ids = input_ids.to(device)

@@ -11,6 +11,7 @@ from coconut_lm.data import (
     read_jsonl_texts,
     write_addition_dataset,
     write_hf_plain_text_dataset,
+    write_hf_proofs3_qa_dataset,
     write_plain_text_dataset,
     write_qa_dataset,
 )
@@ -93,6 +94,48 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(records[0]["kind"], "hf-plain-text")
         self.assertEqual(records[0]["source"], "shreyasharma/sentences_truthv2")
         self.assertEqual(records[1]["row_idx"], 1)
+
+    def test_proofs3_qa_dataset_formats_context_question_and_latents(self):
+        def fake_fetch_page(**kwargs):
+            self.assertEqual(kwargs["dataset"], "shreyasharma/proofs3")
+            return {
+                "rows": [
+                    {
+                        "row_idx": 7,
+                        "row": {
+                            "triples": {
+                                "sent1": "leo is a kind of constellation",
+                                "sent2": "constellations contain stars",
+                                "sent3": None,
+                            },
+                            "question": "What contains stars?",
+                            "answer": "constellations",
+                            "hypothesis": "constellations contain stars",
+                            "step_proof": "sent1 & sent2 -> hypothesis;",
+                            "label": 1,
+                        },
+                    }
+                ]
+            }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "proofs3.jsonl"
+            write_hf_proofs3_qa_dataset(
+                path,
+                dataset="shreyasharma/proofs3",
+                config="default",
+                split="train",
+                examples=1,
+                latent_steps=2,
+                fetch_page=fake_fetch_page,
+            )
+            record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(record["kind"], "proofs3-latent-qa")
+        self.assertIn("Context:\n- leo is a kind of constellation", record["text"])
+        self.assertIn("Question: What contains stars?", record["text"])
+        self.assertIn("Answer:<latent><latent> constellations", record["text"])
+        self.assertEqual(record["row_idx"], 7)
 
 
 class TokenizerTest(unittest.TestCase):

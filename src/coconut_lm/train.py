@@ -10,6 +10,7 @@ import torch
 from coconut_lm.config import CoconutConfig
 from coconut_lm.data import (
     DEFAULT_VOCAB_TEXT,
+    collate_examples,
     encode_texts,
     make_batch_from_examples,
     read_jsonl_texts,
@@ -22,7 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train or continue a tiny COCONUT LM.")
     parser.add_argument("--dataset", type=Path, default=Path("data/addition_train.jsonl"))
     parser.add_argument("--checkpoint", type=Path, default=None, help="Continue training from a checkpoint.")
-    parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--steps", type=int, default=None, help="Random-sampling updates. If omitted, epochs are used.")
+    parser.add_argument("--epochs", type=int, default=1, help="Full shuffled passes over the dataset when --steps is omitted.")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--n-layer", type=int, default=4)
@@ -66,6 +68,22 @@ def load_or_create_model(
     return tokenizer, config, model
 
 
+def iter_epoch_batches(
+    examples: list[list[int]],
+    *,
+    batch_size: int,
+    epochs: int,
+    rng: random.Random,
+) -> list[list[list[int]]]:
+    batches: list[list[list[int]]] = []
+    for _ in range(epochs):
+        order = list(range(len(examples)))
+        rng.shuffle(order)
+        for start in range(0, len(order), batch_size):
+            batches.append([examples[idx] for idx in order[start : start + batch_size]])
+    return batches
+
+
 def main() -> None:
     args = parse_args()
     rng = random.Random(args.seed)
@@ -79,14 +97,33 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     model.train()
-    for step in range(1, args.steps + 1):
-        input_ids, targets = make_batch_from_examples(
+    if args.steps is None:
+        epoch_batches = iter_epoch_batches(
             examples,
-            tokenizer=tokenizer,
             batch_size=args.batch_size,
+            epochs=args.epochs,
             rng=rng,
-            device=device,
         )
+        total_steps = len(epoch_batches)
+    else:
+        epoch_batches = []
+        total_steps = args.steps
+
+    for step in range(1, total_steps + 1):
+        if args.steps is None:
+            input_ids, targets = collate_examples(
+                epoch_batches[step - 1],
+                tokenizer=tokenizer,
+                device=device,
+            )
+        else:
+            input_ids, targets = make_batch_from_examples(
+                examples,
+                tokenizer=tokenizer,
+                batch_size=args.batch_size,
+                rng=rng,
+                device=device,
+            )
         output = model(input_ids, targets=targets)
         assert output.loss is not None
         optimizer.zero_grad(set_to_none=True)

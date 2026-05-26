@@ -25,6 +25,8 @@ coconut-build-dataset --kind plain-text --out data/plain_text.jsonl --examples 1
 coconut-build-dataset --kind hf-plain-text --out data/truthv2_plain_text.jsonl --examples 1000
 coconut-build-dataset --kind qa --out data/qa.jsonl --examples 1000
 coconut-build-dataset --kind latent-qa --out data/latent_qa.jsonl --examples 1000 --latent-steps 4
+coconut-build-dataset --kind proofs3-qa --out data/proofs3_qa.jsonl --examples 5000
+coconut-build-dataset --kind proofs3-latent-qa --out data/proofs3_latent_qa.jsonl --examples 5000 --latent-steps 4
 ```
 
 Each JSONL row has a `text` field that acts like one tiny training document:
@@ -45,20 +47,24 @@ coconut-build-dataset \
   --examples 5000
 ```
 
+The `proofs3-qa` and `proofs3-latent-qa` modes default to `shreyasharma/proofs3`. They format each row as context facts from `triples`, then the dataset `question`, then either `Answer:` or `Answer:<latent>...`.
+
 ## Train With A Curriculum
 
 ```bash
-coconut-train --dataset data/plain_text.jsonl --steps 1000 --out-dir runs/plain
-coconut-train --dataset data/qa.jsonl --checkpoint runs/plain/model.pt --steps 1000 --out-dir runs/qa
-coconut-train --dataset data/latent_qa.jsonl --checkpoint runs/qa/model.pt --steps 1000 --out-dir runs/latent_qa
+coconut-train --dataset data/truthv2_plain_text.jsonl --block-size 1024 --epochs 1 --out-dir runs/plain
+coconut-train --dataset data/proofs3_qa.jsonl --checkpoint runs/plain/model.pt --epochs 1 --out-dir runs/proofs3_qa
+coconut-train --dataset data/proofs3_latent_qa.jsonl --checkpoint runs/proofs3_qa/model.pt --epochs 1 --out-dir runs/proofs3_latent_qa
 ```
 
 The first stage is normal next-token language modeling. The second stage teaches a simple question-answer format. The third stage keeps the same visible-answer objective, but inserts `<latent>` slots before the answer and fills those slots with continuous hidden states during the forward pass.
 
+When `--steps` is omitted, training uses `--epochs` and makes full shuffled passes over the dataset without replacement. For example, 5000 rows with `--batch-size 64 --epochs 1` runs 79 optimizer updates. Use `--steps N` when you explicitly want random sampling with replacement.
+
 ## Generate
 
 ```bash
-coconut-generate --checkpoint runs/latent_qa/model.pt --prompt "Question: What is 8 plus 9?\nAnswer:" --latent-steps 4
+coconut-generate --checkpoint runs/proofs3_latent_qa/model.pt --prompt "Question: What is 8 plus 9?\nAnswer:" --latent-steps 4
 ```
 
 ## Why Continuous Thoughts?
