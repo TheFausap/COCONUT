@@ -41,7 +41,6 @@ Each JSONL row has a `text` field that acts like one tiny training document:
 {"text": "Question: What is 79 plus 68?\nAnswer:<latent><latent><latent><latent> 147", "kind": "latent-qa", "question": "What is 79 plus 68?", "answer": "147", "left": 79, "right": 68}
 ```
 
-The `hf-plain-text` mode defaults to `shreyasharma/sentences_truthv2` and fetches rows through Hugging Face's dataset-viewer API, so local Parquet handling is not needed. It tries common text columns such as `text` and `sentence`; pass `--text-column COLUMN_NAME` if you want to force one:
 The `hf-plain-text` mode defaults to `shreyasharma/sentences_truthv2` and fetches rows with the Hugging Face Python library. It tries common text columns such as `text` and `sentence`; pass `--text-column COLUMN_NAME` if you want to force one. Prefer putting your token in `HF_TOKEN` instead of passing it on the command line:
 
 ```bash
