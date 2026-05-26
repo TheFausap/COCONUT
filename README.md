@@ -8,8 +8,8 @@ The implementation is intentionally compact:
 
 - `TinyCoconutLM`: GPT-like decoder with causal self-attention.
 - Continuous thought injection: `<latent>` token embeddings are replaced by hidden states.
-- Dataset builder: writes visible JSONL examples such as `Q: 7+5=\nA:<latent><latent> 12`.
-- Toy arithmetic trainer: reads that JSONL corpus instead of synthesizing batches inside the loop.
+- Dataset builder: writes visible JSONL examples for plain text, QA, latent QA, or old-style addition.
+- Curriculum trainer: can start from scratch or continue from an earlier checkpoint.
 - Generation CLI: runs latent steps internally and decodes only visible answer tokens.
 
 ## Install
@@ -18,28 +18,34 @@ The implementation is intentionally compact:
 python -m pip install -e ".[dev]"
 ```
 
-## Build The Toy Pretraining File
+## Build Toy Training Files
 
 ```bash
-coconut-build-dataset --out data/addition_train.jsonl --examples 1000 --latent-steps 4
+coconut-build-dataset --kind plain-text --out data/plain_text.jsonl --examples 1000
+coconut-build-dataset --kind qa --out data/qa.jsonl --examples 1000
+coconut-build-dataset --kind latent-qa --out data/latent_qa.jsonl --examples 1000 --latent-steps 4
 ```
 
-Each JSONL row has a `text` field that acts like the model's tiny pretraining document:
+Each JSONL row has a `text` field that acts like one tiny training document:
 
 ```json
-{"text": "Q: 79+68=\nA:<latent><latent><latent><latent> 147", "left": 79, "right": 68, "answer": 147}
+{"text": "Question: What is 79 plus 68?\nAnswer:<latent><latent><latent><latent> 147", "kind": "latent-qa", "question": "What is 79 plus 68?", "answer": "147", "left": 79, "right": 68}
 ```
 
-## Train A Toy Model
+## Train With A Curriculum
 
 ```bash
-coconut-train --dataset data/addition_train.jsonl --steps 1000 --batch-size 64 --out-dir runs/addition
+coconut-train --dataset data/plain_text.jsonl --steps 1000 --out-dir runs/plain
+coconut-train --dataset data/qa.jsonl --checkpoint runs/plain/model.pt --steps 1000 --out-dir runs/qa
+coconut-train --dataset data/latent_qa.jsonl --checkpoint runs/qa/model.pt --steps 1000 --out-dir runs/latent_qa
 ```
+
+The first stage is normal next-token language modeling. The second stage teaches a simple question-answer format. The third stage keeps the same visible-answer objective, but inserts `<latent>` slots before the answer and fills those slots with continuous hidden states during the forward pass.
 
 ## Generate
 
 ```bash
-coconut-generate --checkpoint runs/addition/model.pt --prompt "Q: 8+9=\nA:" --latent-steps 4
+coconut-generate --checkpoint runs/latent_qa/model.pt --prompt "Question: What is 8 plus 9?\nAnswer:" --latent-steps 4
 ```
 
 ## Why Continuous Thoughts?

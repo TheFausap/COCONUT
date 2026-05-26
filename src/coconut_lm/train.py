@@ -9,20 +9,22 @@ import torch
 
 from coconut_lm.config import CoconutConfig
 from coconut_lm.data import (
-    build_addition_tokenizer,
+    build_default_tokenizer,
     encode_texts,
     make_batch_from_examples,
     read_jsonl_texts,
 )
 from coconut_lm.model import TinyCoconutLM
+from coconut_lm.tokenizer import CharTokenizer
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a tiny COCONUT LM on toy addition.")
+    parser = argparse.ArgumentParser(description="Train or continue a tiny COCONUT LM.")
     parser.add_argument("--dataset", type=Path, default=Path("data/addition_train.jsonl"))
+    parser.add_argument("--checkpoint", type=Path, default=None, help="Continue training from a checkpoint.")
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--block-size", type=int, default=64)
+    parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--n-layer", type=int, default=4)
     parser.add_argument("--n-head", type=int, default=4)
     parser.add_argument("--n-embd", type=int, default=128)
@@ -35,16 +37,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    rng = random.Random(args.seed)
-    torch.manual_seed(args.seed)
-    device = torch.device(args.device)
+def load_or_create_model(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[CharTokenizer, CoconutConfig, TinyCoconutLM]:
+    if args.checkpoint is not None:
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        tokenizer = CharTokenizer.from_stoi(checkpoint["tokenizer"])
+        config = CoconutConfig(**checkpoint["config"])
+        model = TinyCoconutLM(config).to(device)
+        model.load_state_dict(checkpoint["model"])
+        return tokenizer, config, model
 
-    tokenizer = build_addition_tokenizer()
-    texts = read_jsonl_texts(args.dataset)
-    examples = encode_texts(tokenizer, texts, args.block_size)
-    latent_steps = texts[0].count("<latent>")
+    tokenizer = build_default_tokenizer()
     config = CoconutConfig(
         vocab_size=len(tokenizer.itos),
         block_size=args.block_size,
@@ -56,6 +62,19 @@ def main() -> None:
         latent_token_id=tokenizer.latent_id,
     )
     model = TinyCoconutLM(config).to(device)
+    return tokenizer, config, model
+
+
+def main() -> None:
+    args = parse_args()
+    rng = random.Random(args.seed)
+    torch.manual_seed(args.seed)
+    device = torch.device(args.device)
+
+    tokenizer, config, model = load_or_create_model(args, device=device)
+    texts = read_jsonl_texts(args.dataset)
+    examples = encode_texts(tokenizer, texts, config.block_size)
+    latent_steps = texts[0].count("<latent>")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     model.train()
@@ -84,6 +103,7 @@ def main() -> None:
         "tokenizer": tokenizer.stoi,
         "dataset": str(args.dataset),
         "latent_steps": latent_steps,
+        "source_checkpoint": str(args.checkpoint) if args.checkpoint else None,
     }
     path = args.out_dir / "model.pt"
     torch.save(checkpoint, path)
