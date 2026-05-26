@@ -18,6 +18,12 @@ The implementation is intentionally compact:
 python -m pip install -e ".[dev]"
 ```
 
+For Hugging Face dataset downloads, install the optional HF dependencies:
+
+```bash
+python -m pip install -e ".[dev,hf]"
+```
+
 ## Build Toy Training Files
 
 ```bash
@@ -36,8 +42,11 @@ Each JSONL row has a `text` field that acts like one tiny training document:
 ```
 
 The `hf-plain-text` mode defaults to `shreyasharma/sentences_truthv2` and fetches rows through Hugging Face's dataset-viewer API, so local Parquet handling is not needed. It tries common text columns such as `text` and `sentence`; pass `--text-column COLUMN_NAME` if you want to force one:
+The `hf-plain-text` mode defaults to `shreyasharma/sentences_truthv2` and fetches rows with the Hugging Face Python library. It tries common text columns such as `text` and `sentence`; pass `--text-column COLUMN_NAME` if you want to force one. Prefer putting your token in `HF_TOKEN` instead of passing it on the command line:
 
 ```bash
+export HF_TOKEN=hf_...
+
 coconut-build-dataset \
   --kind hf-plain-text \
   --hf-dataset shreyasharma/sentences_truthv2 \
@@ -46,6 +55,8 @@ coconut-build-dataset \
   --out data/truthv2_plain_text.jsonl \
   --examples 5000
 ```
+
+By default the builder streams rows. Add `--no-streaming` if you want `datasets`/`huggingface_hub` to download and cache the split locally, which can take advantage of the Hugging Face cache and Xet support when `hf_xet` is installed.
 
 The `proofs3-qa` and `proofs3-latent-qa` modes default to `shreyasharma/proofs3`. They format each row as context facts from `triples`, then the dataset `question`, then either `Answer:` or `Answer:<latent>...`.
 

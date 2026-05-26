@@ -17,6 +17,10 @@ dependencies = [
 dev = [
   "pytest>=8",
 ]
+hf = [
+  "datasets>=3.0",
+  "huggingface_hub[hf_xet]>=0.30",
+]
 
 [project.scripts]
 coconut-build-dataset = "coconut_lm.build_dataset:main"

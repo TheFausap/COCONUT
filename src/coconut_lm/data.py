@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import string
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import urlopen
+from typing import TYPE_CHECKING, Any
 
 from coconut_lm.tokenizer import CharTokenizer
 
@@ -16,7 +15,6 @@ if TYPE_CHECKING:
 
 
 DEFAULT_VOCAB_TEXT = string.ascii_letters + string.digits + string.punctuation + " \n\t"
-HF_ROWS_API = "https://datasets-server.huggingface.co/rows"
 TEXT_COLUMN_CANDIDATES = [
     "text",
     "sentence",
@@ -114,32 +112,50 @@ def write_plain_text_dataset(path: Path, *, examples: int, seed: int) -> None:
     write_jsonl(path, records)
 
 
-def fetch_hf_rows_page(
+def resolve_hf_token(token: str | None = None, token_env: str | None = "HF_TOKEN") -> str | None:
+    if token:
+        return token
+    if token_env:
+        return os.environ.get(token_env)
+    return None
+
+
+def iter_hf_rows(
     *,
     dataset: str,
-    config: str,
+    config: str | None,
     split: str,
-    offset: int,
-    length: int,
-    timeout: float = 30.0,
-) -> dict[str, Any]:
-    query = urlencode(
-        {
-            "dataset": dataset,
-            "config": config,
-            "split": split,
-            "offset": offset,
-            "length": length,
-        }
-    )
-    url = f"{HF_ROWS_API}?{query}"
+    streaming: bool,
+    token: str | None = None,
+    token_env: str | None = "HF_TOKEN",
+) -> Iterator[tuple[int | None, dict[str, Any]]]:
     try:
-        with urlopen(url, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise RuntimeError(f"Hugging Face returned HTTP {exc.code} for {url}") from exc
-    except URLError as exc:
-        raise RuntimeError(f"could not reach Hugging Face dataset API: {exc.reason}") from exc
+        from datasets import load_dataset
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Hugging Face dataset fetching requires optional dependencies. "
+            'Install them with: python -m pip install -e ".[hf]"'
+        ) from exc
+
+    dataset_kwargs: dict[str, Any] = {
+        "path": dataset,
+        "split": split,
+        "streaming": streaming,
+    }
+    if config:
+        dataset_kwargs["name"] = config
+    resolved_token = resolve_hf_token(token, token_env)
+    if resolved_token:
+        dataset_kwargs["token"] = resolved_token
+
+    try:
+        hf_dataset = load_dataset(**dataset_kwargs)
+    except Exception as exc:
+        raise RuntimeError(f"failed to load Hugging Face dataset {dataset!r}: {exc}") from exc
+
+    for row_idx, row in enumerate(hf_dataset):
+        if isinstance(row, dict):
+            yield row_idx, row
 
 
 def extract_text_from_hf_row(row: dict[str, Any], text_column: str | None = None) -> str:
@@ -191,44 +207,39 @@ def write_hf_plain_text_dataset(
     examples: int,
     text_column: str | None = None,
     max_chars: int | None = 500,
-    page_size: int = 100,
-    fetch_page: Callable[..., dict[str, Any]] = fetch_hf_rows_page,
+    streaming: bool = True,
+    token: str | None = None,
+    token_env: str | None = "HF_TOKEN",
+    rows: Iterable[tuple[int | None, dict[str, Any]]] | None = None,
 ) -> None:
     records: list[dict[str, object]] = []
-    offset = 0
-    page_size = max(1, min(page_size, 100))
-
-    while len(records) < examples:
-        page = fetch_page(
+    row_iter = rows
+    if row_iter is None:
+        row_iter = iter_hf_rows(
             dataset=dataset,
             config=config,
             split=split,
-            offset=offset,
-            length=min(page_size, examples - len(records)),
+            streaming=streaming,
+            token=token,
+            token_env=token_env,
         )
-        rows = page.get("rows", [])
-        if not rows:
+
+    for row_idx, row in row_iter:
+        text = clean_plain_text(extract_text_from_hf_row(row, text_column), max_chars=max_chars)
+        if not text:
+            continue
+        records.append(
+            {
+                "text": text,
+                "kind": "hf-plain-text",
+                "source": dataset,
+                "split": split,
+                "row_idx": row_idx,
+                "text_column": text_column,
+            }
+        )
+        if len(records) >= examples:
             break
-        for item in rows:
-            row = item.get("row", item)
-            if not isinstance(row, dict):
-                continue
-            text = clean_plain_text(extract_text_from_hf_row(row, text_column), max_chars=max_chars)
-            if not text:
-                continue
-            records.append(
-                {
-                    "text": text,
-                    "kind": "hf-plain-text",
-                    "source": dataset,
-                    "split": split,
-                    "row_idx": item.get("row_idx"),
-                    "text_column": text_column,
-                }
-            )
-            if len(records) >= examples:
-                break
-        offset += len(rows)
 
     if not records:
         raise ValueError(f"no text rows were fetched from {dataset}/{config}/{split}")
@@ -244,56 +255,51 @@ def write_hf_proofs3_qa_dataset(
     examples: int,
     latent_steps: int,
     max_context_sentences: int | None = 12,
-    page_size: int = 100,
-    fetch_page: Callable[..., dict[str, Any]] = fetch_hf_rows_page,
+    streaming: bool = True,
+    token: str | None = None,
+    token_env: str | None = "HF_TOKEN",
+    rows: Iterable[tuple[int | None, dict[str, Any]]] | None = None,
 ) -> None:
     records: list[dict[str, object]] = []
-    offset = 0
-    page_size = max(1, min(page_size, 100))
-
-    while len(records) < examples:
-        page = fetch_page(
+    row_iter = rows
+    if row_iter is None:
+        row_iter = iter_hf_rows(
             dataset=dataset,
             config=config,
             split=split,
-            offset=offset,
-            length=min(page_size, examples - len(records)),
+            streaming=streaming,
+            token=token,
+            token_env=token_env,
         )
-        rows = page.get("rows", [])
-        if not rows:
+
+    for row_idx, row in row_iter:
+        question = row.get("question")
+        answer = row.get("answer")
+        triples = row.get("triples")
+        if not isinstance(question, str) or not isinstance(answer, str) or not isinstance(triples, dict):
+            continue
+        context = sorted_numbered_values(triples, prefix="sent", limit=max_context_sentences)
+        if not context:
+            continue
+        question = clean_plain_text(question)
+        answer = clean_plain_text(answer)
+        records.append(
+            {
+                "text": render_context_qa_text(context, question, answer, latent_steps),
+                "kind": "proofs3-latent-qa" if latent_steps else "proofs3-qa",
+                "source": dataset,
+                "split": split,
+                "row_idx": row_idx,
+                "question": question,
+                "answer": answer,
+                "hypothesis": clean_plain_text(row["hypothesis"]) if isinstance(row.get("hypothesis"), str) else None,
+                "step_proof": clean_plain_text(row["step_proof"]) if isinstance(row.get("step_proof"), str) else None,
+                "label": row.get("label"),
+                "context": context,
+            }
+        )
+        if len(records) >= examples:
             break
-        for item in rows:
-            row = item.get("row", item)
-            if not isinstance(row, dict):
-                continue
-            question = row.get("question")
-            answer = row.get("answer")
-            triples = row.get("triples")
-            if not isinstance(question, str) or not isinstance(answer, str) or not isinstance(triples, dict):
-                continue
-            context = sorted_numbered_values(triples, prefix="sent", limit=max_context_sentences)
-            if not context:
-                continue
-            question = clean_plain_text(question)
-            answer = clean_plain_text(answer)
-            records.append(
-                {
-                    "text": render_context_qa_text(context, question, answer, latent_steps),
-                    "kind": "proofs3-latent-qa" if latent_steps else "proofs3-qa",
-                    "source": dataset,
-                    "split": split,
-                    "row_idx": item.get("row_idx"),
-                    "question": question,
-                    "answer": answer,
-                    "hypothesis": clean_plain_text(row["hypothesis"]) if isinstance(row.get("hypothesis"), str) else None,
-                    "step_proof": clean_plain_text(row["step_proof"]) if isinstance(row.get("step_proof"), str) else None,
-                    "label": row.get("label"),
-                    "context": context,
-                }
-            )
-            if len(records) >= examples:
-                break
-        offset += len(rows)
 
     if not records:
         raise ValueError(f"no proofs3 QA rows were fetched from {dataset}/{config}/{split}")

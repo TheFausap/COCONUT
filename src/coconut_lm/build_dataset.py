@@ -36,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-dataset", default=None)
     parser.add_argument("--hf-config", default="default")
     parser.add_argument("--hf-split", default="train")
+    parser.add_argument("--hf-token-env", default="HF_TOKEN")
+    parser.add_argument("--hf-token", default=None, help="Hugging Face token. Prefer --hf-token-env for shell history safety.")
+    parser.add_argument("--no-streaming", action="store_true", help="Download/cache the dataset split instead of streaming rows.")
     parser.add_argument("--text-column", default=None)
     parser.add_argument("--max-chars", type=int, default=500)
     parser.add_argument("--max-context-sentences", type=int, default=12)
@@ -61,6 +64,9 @@ def main() -> None:
             examples=args.examples,
             text_column=args.text_column,
             max_chars=args.max_chars,
+            streaming=not args.no_streaming,
+            token=args.hf_token,
+            token_env=args.hf_token_env,
         )
     elif args.kind == "proofs3-qa":
         write_hf_proofs3_qa_dataset(
@@ -71,6 +77,9 @@ def main() -> None:
             examples=args.examples,
             latent_steps=0,
             max_context_sentences=args.max_context_sentences,
+            streaming=not args.no_streaming,
+            token=args.hf_token,
+            token_env=args.hf_token_env,
         )
     elif args.kind == "proofs3-latent-qa":
         write_hf_proofs3_qa_dataset(
@@ -81,6 +90,9 @@ def main() -> None:
             examples=args.examples,
             latent_steps=args.latent_steps,
             max_context_sentences=args.max_context_sentences,
+            streaming=not args.no_streaming,
+            token=args.hf_token,
+            token_env=args.hf_token_env,
         )
     elif args.kind == "qa":
         write_qa_dataset(

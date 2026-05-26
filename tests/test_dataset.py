@@ -83,7 +83,10 @@ class DatasetTest(unittest.TestCase):
                 config="default",
                 split="train",
                 examples=2,
-                fetch_page=fake_fetch_page,
+                rows=(
+                    (item["row_idx"], item["row"])
+                    for item in fake_fetch_page(dataset="shreyasharma/sentences_truthv2")["rows"]
+                ),
             )
             records = [
                 json.loads(line)
@@ -127,7 +130,10 @@ class DatasetTest(unittest.TestCase):
                 split="train",
                 examples=1,
                 latent_steps=2,
-                fetch_page=fake_fetch_page,
+                rows=(
+                    (item["row_idx"], item["row"])
+                    for item in fake_fetch_page(dataset="shreyasharma/proofs3")["rows"]
+                ),
             )
             record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
 
