@@ -33,6 +33,9 @@ coconut-build-dataset --kind qa --out data/qa.jsonl --examples 1000
 coconut-build-dataset --kind latent-qa --out data/latent_qa.jsonl --examples 1000 --latent-steps 4
 coconut-build-dataset --kind proofs3-qa --out data/proofs3_qa.jsonl --examples 5000
 coconut-build-dataset --kind proofs3-latent-qa --out data/proofs3_latent_qa.jsonl --examples 5000 --latent-steps 4
+coconut-build-dataset --kind ultrafineweb-plain --out data/ultrafineweb_plain.jsonl --examples 5000 --max-chars 3000
+coconut-build-dataset --kind ultrafineweb-qa --out data/ultrafineweb_qa.jsonl --examples 5000 --max-context-chars 3000 --max-qa-pairs-per-source 2
+coconut-build-dataset --kind ultrafineweb-latent-qa --out data/ultrafineweb_latent_qa.jsonl --examples 5000 --latent-steps 2 --max-context-chars 3000 --max-qa-pairs-per-source 1
 ```
 
 Each JSONL row has a `text` field that acts like one tiny training document:
@@ -59,12 +62,14 @@ By default the builder streams rows. Add `--no-streaming` if you want `datasets`
 
 The `proofs3-qa` and `proofs3-latent-qa` modes default to `shreyasharma/proofs3`. They format each row as context facts from `triples`, then the dataset `question`, then either `Answer:` or `Answer:<latent>...`.
 
+The `ultrafineweb-plain` mode defaults to `openbmb/Ultra-FineWeb-L3` with config `Ultra-FineWeb-L3-en-Multi-Style-Synthetic`. The `ultrafineweb-qa` and `ultrafineweb-latent-qa` modes default to config `Ultra-FineWeb-L3-en-QA-Synthetic`; each source row is split into separate `Context` + `Question` + `Answer` examples. Keep `--max-qa-pairs-per-source` low for latent QA because every latent answer adds extra transformer passes.
+
 ## Train With A Curriculum
 
 ```bash
 coconut-train --dataset data/truthv2_plain_text.jsonl --block-size 1024 --epochs 1 --out-dir runs/plain
-coconut-train --dataset data/proofs3_qa.jsonl --checkpoint runs/plain/model.pt --epochs 1 --out-dir runs/proofs3_qa
-coconut-train --dataset data/proofs3_latent_qa.jsonl --checkpoint runs/proofs3_qa/model.pt --epochs 1 --batch-size 1 --grad-accum-steps 16 --out-dir runs/proofs3_latent_qa
+coconut-train --dataset data/ultrafineweb_qa.jsonl --checkpoint runs/plain/model.pt --epochs 1 --out-dir runs/ultrafineweb_qa
+coconut-train --dataset data/ultrafineweb_latent_qa.jsonl --checkpoint runs/ultrafineweb_qa/model.pt --epochs 1 --batch-size 1 --grad-accum-steps 16 --out-dir runs/ultrafineweb_latent_qa
 ```
 
 The first stage is normal next-token language modeling. The second stage teaches a simple question-answer format. The third stage keeps the same visible-answer objective, but inserts `<latent>` slots before the answer and fills those slots with continuous hidden states during the forward pass.

@@ -12,6 +12,7 @@ from coconut_lm.data import (
     write_addition_dataset,
     write_hf_plain_text_dataset,
     write_hf_proofs3_qa_dataset,
+    write_hf_ultrafineweb_qa_dataset,
     write_plain_text_dataset,
     write_qa_dataset,
 )
@@ -143,6 +144,46 @@ class DatasetTest(unittest.TestCase):
         self.assertIn("Answer:<latent><latent> constellations", record["text"])
         self.assertEqual(record["row_idx"], 7)
 
+    def test_ultrafineweb_qa_splits_one_source_into_qa_examples(self):
+        rows = [
+            (
+                3,
+                {
+                    "uid": "abc",
+                    "style": "qa",
+                    "content": (
+                        "Source paragraph about tides and the moon.\n\n"
+                        "Question: What causes tides? Answer: Gravity from the moon and sun.\n\n"
+                        "Question: Which body has the strongest effect?\n"
+                        "A) Mars\nB) The moon Answer: B) The moon"
+                    ),
+                },
+            )
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "ultra.jsonl"
+            write_hf_ultrafineweb_qa_dataset(
+                path,
+                dataset="openbmb/Ultra-FineWeb-L3",
+                config="Ultra-FineWeb-L3-en-QA-Synthetic",
+                split="train",
+                examples=2,
+                latent_steps=2,
+                rows=rows,
+            )
+            records = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["kind"], "ultrafineweb-latent-qa")
+        self.assertIn("Context:\nSource paragraph", records[0]["text"])
+        self.assertIn("Answer:<latent><latent> Gravity from the moon and sun.", records[0]["text"])
+        self.assertIn("A) Mars B) The moon", records[1]["question"])
+        self.assertEqual(records[1]["answer"], "B) The moon")
+
 
 class TokenizerTest(unittest.TestCase):
     def test_encode_recognizes_special_tokens_inside_text(self):
@@ -159,6 +200,13 @@ class TokenizerTest(unittest.TestCase):
         ids = tokenizer.encode("Question: What is 8 plus 9?\nAnswer:<latent> 17")
 
         self.assertIn(tokenizer.latent_id, ids)
+
+    def test_tokenizer_uses_unknown_token_for_unseen_characters(self):
+        tokenizer = CharTokenizer.build("abc")
+
+        ids = tokenizer.encode("abc🙂")
+
+        self.assertEqual(ids[-1], tokenizer.unk_id)
 
 
 if __name__ == "__main__":

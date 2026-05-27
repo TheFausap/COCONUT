@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import string
 from collections.abc import Iterable, Iterator
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +26,9 @@ TEXT_COLUMN_CANDIDATES = [
     "question",
 ]
 PROOFS3_DATASET = "shreyasharma/proofs3"
+ULTRAFINEWEB_L3_DATASET = "openbmb/Ultra-FineWeb-L3"
+ULTRAFINEWEB_L3_EN_MULTI_STYLE_CONFIG = "Ultra-FineWeb-L3-en-Multi-Style-Synthetic"
+ULTRAFINEWEB_L3_EN_QA_CONFIG = "Ultra-FineWeb-L3-en-QA-Synthetic"
 
 PLAIN_TEXT_TEMPLATES = [
     "The sun is bright and warm.",
@@ -66,6 +71,14 @@ def render_context_qa_text(context: list[str], question: str, answer: str, laten
     context_block = "\n".join(f"- {fact}" for fact in context)
     return (
         f"Context:\n{context_block}\n\nQuestion: {question}\nAnswer:"
+        + ("<latent>" * latent_steps)
+        + f" {answer}"
+    )
+
+
+def render_context_text_qa(context: str, question: str, answer: str, latent_steps: int = 0) -> str:
+    return (
+        f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
         + ("<latent>" * latent_steps)
         + f" {answer}"
     )
@@ -207,6 +220,7 @@ def write_hf_plain_text_dataset(
     examples: int,
     text_column: str | None = None,
     max_chars: int | None = 500,
+    kind: str = "hf-plain-text",
     streaming: bool = True,
     token: str | None = None,
     token_env: str | None = "HF_TOKEN",
@@ -224,25 +238,123 @@ def write_hf_plain_text_dataset(
             token_env=token_env,
         )
 
-    for row_idx, row in row_iter:
-        text = clean_plain_text(extract_text_from_hf_row(row, text_column), max_chars=max_chars)
-        if not text:
-            continue
-        records.append(
-            {
-                "text": text,
-                "kind": "hf-plain-text",
-                "source": dataset,
-                "split": split,
-                "row_idx": row_idx,
-                "text_column": text_column,
-            }
-        )
-        if len(records) >= examples:
-            break
+    try:
+        for row_idx, row in row_iter:
+            text = clean_plain_text(extract_text_from_hf_row(row, text_column), max_chars=max_chars)
+            if not text:
+                continue
+            records.append(
+                {
+                    "text": text,
+                    "kind": kind,
+                    "source": dataset,
+                    "split": split,
+                    "row_idx": row_idx,
+                    "text_column": text_column,
+                }
+            )
+            if len(records) >= examples:
+                break
+    finally:
+        close = getattr(row_iter, "close", None)
+        if close is not None:
+            with suppress(Exception):
+                close()
 
     if not records:
         raise ValueError(f"no text rows were fetched from {dataset}/{config}/{split}")
+    write_jsonl(path, records)
+
+
+QUESTION_ANSWER_PATTERN = re.compile(
+    r"Question:\s*(?P<question>.*?)\s+Answer:\s*(?P<answer>.*?)(?=\n\s*Question:|\Z)",
+    re.DOTALL,
+)
+
+
+def split_ultrafineweb_qa_content(content: str) -> tuple[str, list[tuple[str, str]]]:
+    first_question = content.find("Question:")
+    if first_question < 0:
+        return clean_plain_text(content), []
+
+    context = clean_plain_text(content[:first_question])
+    qa_block = content[first_question:]
+    pairs: list[tuple[str, str]] = []
+    for match in QUESTION_ANSWER_PATTERN.finditer(qa_block):
+        question = clean_plain_text(match.group("question"))
+        answer = clean_plain_text(match.group("answer"))
+        if question and answer:
+            pairs.append((question, answer))
+    return context, pairs
+
+
+def write_hf_ultrafineweb_qa_dataset(
+    path: Path,
+    *,
+    dataset: str,
+    config: str,
+    split: str,
+    examples: int,
+    latent_steps: int,
+    max_context_chars: int | None = 3000,
+    max_qa_pairs_per_source: int | None = 2,
+    streaming: bool = True,
+    token: str | None = None,
+    token_env: str | None = "HF_TOKEN",
+    rows: Iterable[tuple[int | None, dict[str, Any]]] | None = None,
+) -> None:
+    records: list[dict[str, object]] = []
+    row_iter = rows
+    if row_iter is None:
+        row_iter = iter_hf_rows(
+            dataset=dataset,
+            config=config,
+            split=split,
+            streaming=streaming,
+            token=token,
+            token_env=token_env,
+        )
+
+    try:
+        for row_idx, row in row_iter:
+            content = row.get("content")
+            if not isinstance(content, str):
+                continue
+            context, pairs = split_ultrafineweb_qa_content(content)
+            if max_context_chars is not None:
+                context = context[:max_context_chars].rstrip()
+            if not context or not pairs:
+                continue
+            if max_qa_pairs_per_source is not None:
+                pairs = pairs[:max_qa_pairs_per_source]
+            for pair_idx, (question, answer) in enumerate(pairs):
+                records.append(
+                    {
+                        "text": render_context_text_qa(context, question, answer, latent_steps),
+                        "kind": "ultrafineweb-latent-qa" if latent_steps else "ultrafineweb-qa",
+                        "source": dataset,
+                        "config": config,
+                        "split": split,
+                        "row_idx": row_idx,
+                        "pair_idx": pair_idx,
+                        "uid": row.get("uid"),
+                        "style": row.get("style"),
+                        "question": question,
+                        "answer": answer,
+                    }
+                )
+                if len(records) >= examples:
+                    break
+            if len(records) >= examples:
+                break
+    finally:
+        close = getattr(row_iter, "close", None)
+        if close is not None:
+            with suppress(Exception):
+                close()
+
+    if not records:
+        raise ValueError(f"no Ultra-FineWeb QA rows were fetched from {dataset}/{config}/{split}")
     write_jsonl(path, records)
 
 
@@ -272,34 +384,40 @@ def write_hf_proofs3_qa_dataset(
             token_env=token_env,
         )
 
-    for row_idx, row in row_iter:
-        question = row.get("question")
-        answer = row.get("answer")
-        triples = row.get("triples")
-        if not isinstance(question, str) or not isinstance(answer, str) or not isinstance(triples, dict):
-            continue
-        context = sorted_numbered_values(triples, prefix="sent", limit=max_context_sentences)
-        if not context:
-            continue
-        question = clean_plain_text(question)
-        answer = clean_plain_text(answer)
-        records.append(
-            {
-                "text": render_context_qa_text(context, question, answer, latent_steps),
-                "kind": "proofs3-latent-qa" if latent_steps else "proofs3-qa",
-                "source": dataset,
-                "split": split,
-                "row_idx": row_idx,
-                "question": question,
-                "answer": answer,
-                "hypothesis": clean_plain_text(row["hypothesis"]) if isinstance(row.get("hypothesis"), str) else None,
-                "step_proof": clean_plain_text(row["step_proof"]) if isinstance(row.get("step_proof"), str) else None,
-                "label": row.get("label"),
-                "context": context,
-            }
-        )
-        if len(records) >= examples:
-            break
+    try:
+        for row_idx, row in row_iter:
+            question = row.get("question")
+            answer = row.get("answer")
+            triples = row.get("triples")
+            if not isinstance(question, str) or not isinstance(answer, str) or not isinstance(triples, dict):
+                continue
+            context = sorted_numbered_values(triples, prefix="sent", limit=max_context_sentences)
+            if not context:
+                continue
+            question = clean_plain_text(question)
+            answer = clean_plain_text(answer)
+            records.append(
+                {
+                    "text": render_context_qa_text(context, question, answer, latent_steps),
+                    "kind": "proofs3-latent-qa" if latent_steps else "proofs3-qa",
+                    "source": dataset,
+                    "split": split,
+                    "row_idx": row_idx,
+                    "question": question,
+                    "answer": answer,
+                    "hypothesis": clean_plain_text(row["hypothesis"]) if isinstance(row.get("hypothesis"), str) else None,
+                    "step_proof": clean_plain_text(row["step_proof"]) if isinstance(row.get("step_proof"), str) else None,
+                    "label": row.get("label"),
+                    "context": context,
+                }
+            )
+            if len(records) >= examples:
+                break
+    finally:
+        close = getattr(row_iter, "close", None)
+        if close is not None:
+            with suppress(Exception):
+                close()
 
     if not records:
         raise ValueError(f"no proofs3 QA rows were fetched from {dataset}/{config}/{split}")

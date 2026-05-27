@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import sys
 
 from coconut_lm.data import (
+    ULTRAFINEWEB_L3_DATASET,
+    ULTRAFINEWEB_L3_EN_MULTI_STYLE_CONFIG,
+    ULTRAFINEWEB_L3_EN_QA_CONFIG,
     write_addition_dataset,
     write_hf_plain_text_dataset,
     write_hf_proofs3_qa_dataset,
+    write_hf_ultrafineweb_qa_dataset,
     write_plain_text_dataset,
     write_qa_dataset,
 )
@@ -21,6 +27,9 @@ def parse_args() -> argparse.Namespace:
             "hf-plain-text",
             "proofs3-qa",
             "proofs3-latent-qa",
+            "ultrafineweb-plain",
+            "ultrafineweb-qa",
+            "ultrafineweb-latent-qa",
             "qa",
             "latent-qa",
             "addition",
@@ -42,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text-column", default=None)
     parser.add_argument("--max-chars", type=int, default=500)
     parser.add_argument("--max-context-sentences", type=int, default=12)
+    parser.add_argument("--max-context-chars", type=int, default=3000)
+    parser.add_argument("--max-qa-pairs-per-source", type=int, default=2)
     return parser.parse_args()
 
 
@@ -52,6 +63,14 @@ def main() -> None:
         hf_dataset = "shreyasharma/sentences_truthv2"
     elif hf_dataset is None and args.kind.startswith("proofs3-"):
         hf_dataset = "shreyasharma/proofs3"
+    elif hf_dataset is None and args.kind.startswith("ultrafineweb-"):
+        hf_dataset = ULTRAFINEWEB_L3_DATASET
+
+    hf_config = args.hf_config
+    if args.kind == "ultrafineweb-plain" and hf_config == "default":
+        hf_config = ULTRAFINEWEB_L3_EN_MULTI_STYLE_CONFIG
+    elif args.kind in {"ultrafineweb-qa", "ultrafineweb-latent-qa"} and hf_config == "default":
+        hf_config = ULTRAFINEWEB_L3_EN_QA_CONFIG
 
     if args.kind == "plain-text":
         write_plain_text_dataset(args.out, examples=args.examples, seed=args.seed)
@@ -59,7 +78,7 @@ def main() -> None:
         write_hf_plain_text_dataset(
             args.out,
             dataset=hf_dataset,
-            config=args.hf_config,
+            config=hf_config,
             split=args.hf_split,
             examples=args.examples,
             text_column=args.text_column,
@@ -68,11 +87,53 @@ def main() -> None:
             token=args.hf_token,
             token_env=args.hf_token_env,
         )
+    elif args.kind == "ultrafineweb-plain":
+        write_hf_plain_text_dataset(
+            args.out,
+            dataset=hf_dataset,
+            config=hf_config,
+            split=args.hf_split,
+            examples=args.examples,
+            text_column=args.text_column or "content",
+            max_chars=args.max_chars,
+            kind="ultrafineweb-plain",
+            streaming=not args.no_streaming,
+            token=args.hf_token,
+            token_env=args.hf_token_env,
+        )
+    elif args.kind == "ultrafineweb-qa":
+        write_hf_ultrafineweb_qa_dataset(
+            args.out,
+            dataset=hf_dataset,
+            config=hf_config,
+            split=args.hf_split,
+            examples=args.examples,
+            latent_steps=0,
+            max_context_chars=args.max_context_chars,
+            max_qa_pairs_per_source=args.max_qa_pairs_per_source,
+            streaming=not args.no_streaming,
+            token=args.hf_token,
+            token_env=args.hf_token_env,
+        )
+    elif args.kind == "ultrafineweb-latent-qa":
+        write_hf_ultrafineweb_qa_dataset(
+            args.out,
+            dataset=hf_dataset,
+            config=hf_config,
+            split=args.hf_split,
+            examples=args.examples,
+            latent_steps=args.latent_steps,
+            max_context_chars=args.max_context_chars,
+            max_qa_pairs_per_source=args.max_qa_pairs_per_source,
+            streaming=not args.no_streaming,
+            token=args.hf_token,
+            token_env=args.hf_token_env,
+        )
     elif args.kind == "proofs3-qa":
         write_hf_proofs3_qa_dataset(
             args.out,
             dataset=hf_dataset,
-            config=args.hf_config,
+            config=hf_config,
             split=args.hf_split,
             examples=args.examples,
             latent_steps=0,
@@ -85,7 +146,7 @@ def main() -> None:
         write_hf_proofs3_qa_dataset(
             args.out,
             dataset=hf_dataset,
-            config=args.hf_config,
+            config=hf_config,
             split=args.hf_split,
             examples=args.examples,
             latent_steps=args.latent_steps,
@@ -119,6 +180,17 @@ def main() -> None:
             seed=args.seed,
         )
     print(f"wrote {args.examples} {args.kind} examples to {args.out}")
+    if args.kind in {
+        "hf-plain-text",
+        "proofs3-qa",
+        "proofs3-latent-qa",
+        "ultrafineweb-plain",
+        "ultrafineweb-qa",
+        "ultrafineweb-latent-qa",
+    }:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

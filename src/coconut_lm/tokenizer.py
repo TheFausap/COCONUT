@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-SPECIAL_TOKENS = ["<pad>", "<bos>", "<eos>", "<latent>"]
+SPECIAL_TOKENS = ["<pad>", "<bos>", "<eos>", "<latent>", "<unk>"]
 
 
 @dataclass(slots=True)
@@ -43,6 +43,10 @@ class CharTokenizer:
     def latent_id(self) -> int:
         return self.stoi["<latent>"]
 
+    @property
+    def unk_id(self) -> int | None:
+        return self.stoi.get("<unk>")
+
     def encode(self, text: str, *, bos: bool = False, eos: bool = False) -> list[int]:
         ids: list[int] = []
         idx = 0
@@ -54,8 +58,11 @@ class CharTokenizer:
                 continue
             char = text[idx]
             if char not in self.stoi:
-                raise ValueError(f"character {char!r} is not in the tokenizer vocabulary") from None
-            ids.append(self.stoi[char])
+                if self.unk_id is None:
+                    raise ValueError(f"character {char!r} is not in the tokenizer vocabulary") from None
+                ids.append(self.unk_id)
+            else:
+                ids.append(self.stoi[char])
             idx += 1
         if bos:
             ids.insert(0, self.bos_id)
